@@ -14,8 +14,13 @@ barrnap_kingdom = config["barrnap_kingdom"]
 alignment_trim = config["alignment_trim"]
 threads = config["threads"]
 
+
 # read sample data
 sample_data = pd.read_csv(config["samples"]).set_index("ID", drop=False)
+# print(sample_data)
+# sample_data = sample_data[sample_data["ID"] == "NCBN001690_H06_RMNH-5159690"]
+# print("--------")
+# print("sampledata: ",sample_data)
 
 # functions to get forward and reverse reads from sample data
 def get_forward(wildcards):
@@ -254,6 +259,8 @@ rule blobtools:
         # "docker://genomehubs/blobtoolkit"
         "docker://genomehubs/blobtoolkit"
     shell:
+#       test --taxrule bestsumorder \
+#       test --taxrule bestsum \
         """
         FAS=$(echo {output_dir}/assembled_sequence/{wildcards.sample}.fasta)
         BLA=$(echo {output_dir}/blastn/{wildcards.sample}.txt)
@@ -483,71 +490,148 @@ rule alignment_trim:
             fi
         fi
         """
+# deff protein_coding_output(wildcards):
+#     print("====")
+#     print(checkpoints.extract_protein_coding_genes.get.output + "/{dataset}.fasta")
+#     return checkpoints.extract_protein_coding_genes.get().output[0] + "{dataset}.fasta"
+    
+def protein_coding_output(wildcards):
+    print(checkpoints.extract_protein_coding_genes.get().output[0])
+    print(glob_wildcards(checkpoints.extract_protein_coding_genes.get().output[0]  + "/{dataset}.fasta"))
+    dataset = glob_wildcards(checkpoints.extract_protein_coding_genes.get().output[0]  + "/{dataset}.fasta").dataset
+    print(dataset)
+    return expand(
+        checkpoints.extract_protein_coding_genes.get().output[0]  + "/{dataset}.fasta", dataset=dataset
+    )
 
-rule iqtree:
+# input should be per sample per marker
+rule translate_consensus:
     input:
-        output_dir+"/alignment_trim/{dataset}.fasta"        
+        # rules.cutadapt.output.trimmed_consensus,
+        protein_coding_output
+        # output_dir+"/protein_coding_genes/{dataset}.fasta",
     output:
-        output_dir+"/iqtree/{dataset}.treefile",
-        renamed = output_dir+"/iqtree/{dataset}.fasta"
+        # "results/%s/data/{sample}/transeq/{consensus}.fasta" % results_dir,
+        directory(output_dir+"/transeq/"),
+    params:
+        # genetic_code_index=get_genetic_code_index,
+        genetic_code_index = mitos_code,
+        input_fasta_dir=output_dir+ "/protein_coding_genes"
     log:
-        output_dir+"/logs/iqtree/{dataset}.log"
+        # "logs/%s/{sample}/transeq/{consensus}.log" % results_dir,
+        output_dir+"/transeq.log"
     conda:
-        "envs/iqtree.yaml"
+        "envs/emboss.yaml"
     shell:
-        """
-        # only run iqtree if there are at least samples in alignment
-        #if [ $(grep -e "^>" -c {input}) -ge 5 ] ; then  
-        # remove special characters from sample names
-        sed -e 's/;/_/g' -e 's/+//g' \
-            {input} > {output.renamed}
-
-        # iqtree
-        # iqtree will not bootstrap if less than 5 samples in alignment
-        # add if else statement here 
-        #iqtree -s {output.renamed} --prefix {output_dir}/iqtree/{wildcards.dataset} &> {log}
-        if [ $(grep -c "^>" {input}) -lt "3" ]; then
-            touch {output[0]}
-        else
-            iqtree -s {output.renamed} -B 1000 --prefix {output_dir}/iqtree/{wildcards.dataset} &> {log}
-        fi
+        """ 
+            mkdir -p {output}
+            for f in $(ls {params.input_fasta_dir}/*fasta)
+            do
+                echo $f
+                outputname=$(echo "$f" | sed -E 's|.*/([^.]+\.fasta)|\\1|g')
+                echo $outputname
+                if [ $(grep -cvP '\S' $f) -eq "0" ]; then
+                    transeq $f {output}/$outputname -table {params.genetic_code_index} -frame=6 2> {log}
+                else
+                    touch {output}/$outputfile
+                fi
+            done
         """
 
-rule plot_tree:
+def get_transeq_output(wildcards):
+    return rules.translate_consensus.output[0]
+
+checkpoint validate_translated_consensus:
     input:
-        output_dir+"/iqtree/{dataset}.treefile"
+        trans_cons_files=get_transeq_output
+        # cons_files=get_trimmed_consensus_output,
+        # trans_cons_files = output_dir+"/transeq/{dataset}.fasta",
     output:
-        output_dir+"/plot_tree/{dataset}.png"
+        # f"results/{results_dir}/data/valid_prot_consensus.fasta",
+        output_dir+"/validation/valid_prot_consensus.tsv",
     log:
-        output_dir+"/logs/plot_tree/{dataset}.log"
-    conda:
-        "envs/r_env.yaml"
-    shell:
-        """
-        if [ $(grep -cvP '\S' {input[0]}) -eq "0" ]; then
-            touch {output}
-        else
-            Rscript scripts/plot_tree.R {input} {output} &> {log}
-        fi
-        """
+        # f"logs/{results_dir}/check_translated_consensus.log",
+        output_dir+"logs/check_translated_consensus.log",
+    # conda:
+    #     "envs/pdsb.yaml"  # <= is a simple environement with just BioPyhon installed/available
+    # biopython is already available on startup (conda activate genome_skimming_pipeline2)
+    script:
+        "scripts/check_translated_consensus.py"
 
-def get_plot_tree_output(wildcards):
-    checkpoint_output = checkpoints.extract_protein_coding_genes.get(**wildcards).output[0]
-    return expand(output_dir+"/plot_tree/{i}.png", i=glob_wildcards(os.path.join(checkpoint_output, "{i}.fasta")).i)
+# rule iqtree:
+#     input:
+#         output_dir+"/alignment_trim/{dataset}.fasta"
+#     output:
+#         output_dir+"/iqtree/{dataset}.treefile",
+#         renamed = output_dir+"/iqtree/{dataset}.fasta"
+#     log:
+#         output_dir+"/logs/iqtree/{dataset}.log"
+#     conda:
+#         "envs/iqtree.yaml"
+#     shell:
+#         """
+#         # only run iqtree if there are at least samples in alignment
+#         #if [ $(grep -e "^>" -c {input}) -ge 5 ] ; then
+#         # remove special characters from sample names
+#         sed -e 's/;/_/g' -e 's/+//g' \
+#             {input} > {output.renamed}
+#
+#         # iqtree
+#         # iqtree will not bootstrap if less than 5 samples in alignment
+#         # add if else statement here
+#         #iqtree -s {output.renamed} --prefix {output_dir}/iqtree/{wildcards.dataset} &> {log}
+#         if [ $(grep -c "^>" {input}) -lt "3" ]; then
+#             touch {output[0]}
+#         else
+#             iqtree -s {output.renamed} -B 1000 --prefix {output_dir}/iqtree/{wildcards.dataset} &> {log}
+#         fi
+#         """
 
-# create final log when complete 
+# rule plot_tree:
+#     input:
+#         output_dir+"/iqtree/{dataset}.treefile"
+#     output:
+#         output_dir+"/plot_tree/{dataset}.png"
+#     log:
+#         output_dir+"/logs/plot_tree/{dataset}.log"
+#     conda:
+#         "envs/r_env.yaml"
+#     shell:
+#         """
+#         if [ $(grep -cvP '\S' {input[0]}) -eq "0" ]; then
+#             touch {output}
+#         else
+#             Rscript scripts/plot_tree.R {input} {output} &> {log}
+#         fi
+#         """
+#
+# def get_plot_tree_output(wildcards):
+#     checkpoint_output = checkpoints.extract_protein_coding_genes.get(**wildcards).output[0]
+#     return expand(output_dir+"/plot_tree/{i}.png", i=glob_wildcards(os.path.join(checkpoint_output, "{i}.fasta")).i)
+
+# create final log when complete
 rule final_log:
     input:
-        get_plot_tree_output
+        # get_plot_tree_output
+        # output_dir+"/transeq/{dataset}.fasta"
+        # get_transeq_output,
+        output_dir+"/validation/valid_prot_consensus.tsv",
+        # directory(output_dir+"/protein_coding_genes/")
     output:
         output_dir+"/snakemake.ok"
     shell:
         """
-        touch {output}
+        touch {output_dir}something.ok
         rm $(find -path '*{output_dir}*' -name "*.ok")
+        touch {output_dir}something.fq
         rm $(find -path '*{output_dir}*' -name "*.fq")
+        touch {output_dir}something.fq.gz
         rm $(find -path '*{output_dir}*' -name "*.fq.gz")
+        touch {output_dir}something.fastq.gz
         rm $(find -path '*{output_dir}*' -name "*.fastq.gz")
+        touch {output_dir}something.filt_fastqc.zip
+        rm $(find -path '*{output_dir}*' -name "*.filt_fastqc.zip")
+        touch {output}
         """
 
 
