@@ -3,5 +3,4 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - getorganelle =1.7.7.0
-  - spades =3.15.5
+  - fastqc =0.12.1
