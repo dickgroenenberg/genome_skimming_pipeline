@@ -41,34 +41,34 @@ rule all:
         output_dir+"/summary/summary_sample.txt",
         output_dir+"/summary/summary_contig.txt",
         output_dir+"/snakemake.ok",
-        expand(output_dir+"/fastqc/{sample}_R1.html", 
-            sample=sample_data.index.tolist())
+        # expand(output_dir+"/fastqc/{sample}_R1.html",
+        #     sample=sample_data.index.tolist())
 
 # fastqc
 # quality check fastq files
-rule fastqc:
-    input:
-        fwd = get_forward,
-        rev = get_reverse
-    output:
-        fwd = output_dir+"/fastqc/{sample}_R1.html",
-        rev = output_dir+"/fastqc/{sample}_R2.html",
-    params:
-        outdir=lambda wildcards, output: os.path.abspath(os.path.dirname(output[0])) + "/",
-        fwd_outfile = lambda wildcards, input: os.path.basename(input[0]).replace('.fastq.gz', '_fastqc.html').replace('.fq.gz','_fastqc.html'),
-        rev_outfile = lambda wildcards, input: os.path.basename(input[1]).replace('.fastq.gz', '_fastqc.html').replace('.fq.gz','_fastqc.html')
-    log:
-        output_dir+"/logs/fastqc/{sample}.log"
-    conda:
-        "envs/fastqc.yaml"
-    threads: 1
-    shell:
-        """
-        fastqc -o "{params.outdir}" {input.fwd} -t {threads} &> {log} &&
-        mv {params.outdir}/{params.fwd_outfile} {output.fwd} &&
-        fastqc -o "{params.outdir}" {input.rev} -t {threads} &> {log} &&
-        mv {params.outdir}/{params.rev_outfile} {output.rev}
-        """
+# rule fastqc:
+#     input:
+#         fwd = get_forward,
+#         rev = get_reverse
+#     output:
+#         fwd = output_dir+"/fastqc/{sample}_R1.html",
+#         rev = output_dir+"/fastqc/{sample}_R2.html",
+#     params:
+#         outdir=lambda wildcards, output: os.path.abspath(os.path.dirname(output[0])) + "/",
+#         fwd_outfile = lambda wildcards, input: os.path.basename(input[0]).replace('.fastq.gz', '_fastqc.html').replace('.fq.gz','_fastqc.html'),
+#         rev_outfile = lambda wildcards, input: os.path.basename(input[1]).replace('.fastq.gz', '_fastqc.html').replace('.fq.gz','_fastqc.html')
+#     log:
+#         output_dir+"/logs/fastqc/{sample}.log"
+#     conda:
+#         "envs/fastqc.yaml"
+#     threads: 1
+#     shell:
+#         """
+#         fastqc -o "{params.outdir}" {input.fwd} -t {threads} &> {log} &&
+#         mv {params.outdir}/{params.fwd_outfile} {output.fwd} &&
+#         fastqc -o "{params.outdir}" {input.rev} -t {threads} &> {log} &&
+#         mv {params.outdir}/{params.rev_outfile} {output.rev}
+#         """
 
 rule fastp:
     input:
@@ -89,7 +89,12 @@ rule fastp:
         fastp --in1 {input.fwd} --in2 {input.rev} \
             --out1 {output.fwd} --out2 {output.rev} \
             --html {output.html} --json {output.json} \
-            --disable_quality_filtering \
+            --detect_adapter_for_pe \
+            --adapter_sequence=AGATCGGAAGAGCACACGTCTGAACTCCAGTCA \
+            --adapter_sequence_r2=AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT \
+            --trim_poly_g \
+            --correction \
+            --dedup \
             --thread {threads} &> {log}
         """
 
@@ -146,28 +151,7 @@ rule assembled_sequence:
         output_dir+"/logs/assembled_sequence/{sample}.log"
     shell:
         """
-        # find selected path(s) fasta
-        FAS=$(find {output_dir}/getorganelle/{wildcards.sample}/ -name *path_sequence.fasta)
-        # z option: true if length if string is zero.
-        if [[ -z $FAS ]]; then
-            echo No assembly produced for {wildcards.sample} > {log}
-        # more than one selected path
-        elif [ "$(echo $FAS | tr ' ' '\\n' | wc -l)" -gt 1 ]; then
-            FAS1=$(echo $FAS | tr ' ' '\\n' | head -n 1)
-            echo More than one assembly produced for {wildcards.sample} > {log}
-            echo Selecting the first assembly $FAS1 > {log}
-            python scripts/rename_assembled.py \
-                --input $FAS1 \
-                --sample {wildcards.sample} \
-                --output {output_dir}/assembled_sequence
-        elif [ "$(echo $FAS | tr ' ' '\\n' | wc -l)" -eq 1 ]; then
-            echo One assembly produced for {wildcards.sample} > {log}
-            python scripts/rename_assembled.py \
-                --input $FAS \
-                --sample {wildcards.sample} \
-                --output {output_dir}/assembled_sequence
-        fi
-        touch {output.ok}
+        sh scripts/assemble_sequence.sh {output_dir} {wildcards.sample} {output.ok} > {log} 2>&1
         """
 
 rule seqkit:
@@ -558,61 +542,61 @@ checkpoint validate_translated_consensus:
     script:
         "scripts/check_translated_consensus.py"
 
-# rule iqtree:
-#     input:
-#         output_dir+"/alignment_trim/{dataset}.fasta"
-#     output:
-#         output_dir+"/iqtree/{dataset}.treefile",
-#         renamed = output_dir+"/iqtree/{dataset}.fasta"
-#     log:
-#         output_dir+"/logs/iqtree/{dataset}.log"
-#     conda:
-#         "envs/iqtree.yaml"
-#     shell:
-#         """
-#         # only run iqtree if there are at least samples in alignment
-#         #if [ $(grep -e "^>" -c {input}) -ge 5 ] ; then
-#         # remove special characters from sample names
-#         sed -e 's/;/_/g' -e 's/+//g' \
-#             {input} > {output.renamed}
-#
-#         # iqtree
-#         # iqtree will not bootstrap if less than 5 samples in alignment
-#         # add if else statement here
-#         #iqtree -s {output.renamed} --prefix {output_dir}/iqtree/{wildcards.dataset} &> {log}
-#         if [ $(grep -c "^>" {input}) -lt "3" ]; then
-#             touch {output[0]}
-#         else
-#             iqtree -s {output.renamed} -B 1000 --prefix {output_dir}/iqtree/{wildcards.dataset} &> {log}
-#         fi
-#         """
+rule iqtree:
+    input:
+        output_dir+"/alignment_trim/{dataset}.fasta"
+    output:
+        output_dir+"/iqtree/{dataset}.treefile",
+        renamed = output_dir+"/iqtree/{dataset}.fasta"
+    log:
+        output_dir+"/logs/iqtree/{dataset}.log"
+    conda:
+        "envs/iqtree.yaml"
+    shell:
+        """
+        # only run iqtree if there are at least samples in alignment
+        #if [ $(grep -e "^>" -c {input}) -ge 5 ] ; then
+        # remove special characters from sample names
+        sed -e 's/;/_/g' -e 's/+//g' \
+            {input} > {output.renamed}
 
-# rule plot_tree:
-#     input:
-#         output_dir+"/iqtree/{dataset}.treefile"
-#     output:
-#         output_dir+"/plot_tree/{dataset}.png"
-#     log:
-#         output_dir+"/logs/plot_tree/{dataset}.log"
-#     conda:
-#         "envs/r_env.yaml"
-#     shell:
-#         """
-#         if [ $(grep -cvP '\S' {input[0]}) -eq "0" ]; then
-#             touch {output}
-#         else
-#             Rscript scripts/plot_tree.R {input} {output} &> {log}
-#         fi
-#         """
-#
-# def get_plot_tree_output(wildcards):
-#     checkpoint_output = checkpoints.extract_protein_coding_genes.get(**wildcards).output[0]
-#     return expand(output_dir+"/plot_tree/{i}.png", i=glob_wildcards(os.path.join(checkpoint_output, "{i}.fasta")).i)
+        # iqtree
+        # iqtree will not bootstrap if less than 5 samples in alignment
+        # add if else statement here
+        #iqtree -s {output.renamed} --prefix {output_dir}/iqtree/{wildcards.dataset} &> {log}
+        if [ $(grep -c "^>" {input}) -lt "3" ]; then
+            touch {output[0]}
+        else
+            iqtree -s {output.renamed} -B 1000 --prefix {output_dir}/iqtree/{wildcards.dataset} &> {log}
+        fi
+        """
+
+rule plot_tree:
+    input:
+        output_dir+"/iqtree/{dataset}.treefile"
+    output:
+        output_dir+"/plot_tree/{dataset}.png"
+    log:
+        output_dir+"/logs/plot_tree/{dataset}.log"
+    conda:
+        "envs/r_env.yaml"
+    shell:
+        """
+        if [ $(grep -cvP '\S' {input[0]}) -eq "0" ]; then
+            touch {output}
+        else
+            Rscript scripts/plot_tree.R {input} {output} &> {log}
+        fi
+        """
+
+def get_plot_tree_output(wildcards):
+    checkpoint_output = checkpoints.extract_protein_coding_genes.get(**wildcards).output[0]
+    return expand(output_dir+"/plot_tree/{i}.png", i=glob_wildcards(os.path.join(checkpoint_output, "{i}.fasta")).i)
 
 # create final log when complete
 rule final_log:
     input:
-        # get_plot_tree_output
+        get_plot_tree_output,
         # output_dir+"/transeq/{dataset}.fasta"
         # get_transeq_output,
         output_dir+"/validation/valid_prot_consensus.tsv",
@@ -621,17 +605,19 @@ rule final_log:
         output_dir+"/snakemake.ok"
     shell:
         """
-        touch {output_dir}something.ok
-        rm $(find -path '*{output_dir}*' -name "*.ok")
+        touch {output}
         touch {output_dir}something.fq
         rm $(find -path '*{output_dir}*' -name "*.fq")
         touch {output_dir}something.fq.gz
         rm $(find -path '*{output_dir}*' -name "*.fq.gz")
         touch {output_dir}something.fastq.gz
         rm $(find -path '*{output_dir}*' -name "*.fastq.gz")
-        touch {output_dir}something.filt_fastqc.zip
-        rm $(find -path '*{output_dir}*' -name "*.filt_fastqc.zip")
-        touch {output}
         """
+
+        # touch {output_dir}something.ok
+        # rm $(find -path '*{output_dir}*' -name "*.ok")
+        # touch {output_dir}something.filt_fastqc.zip
+        # rm $(find -path '*{output_dir}*' -name "*.filt_fastqc.zip")
+
 
 
