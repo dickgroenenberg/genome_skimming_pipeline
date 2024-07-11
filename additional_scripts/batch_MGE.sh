@@ -49,7 +49,8 @@ for fasta_file in *.fas *.fasta; do
 	-t 0.5 \
 	-r 1 \
 	-C 5 \
-	--verbosity 0
+	--verbosity 0 \
+	--report_gaps_mode 1
 	fi
 done
 
