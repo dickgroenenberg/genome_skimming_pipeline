@@ -24,7 +24,8 @@ def add_seed_and_gene(input_file1, input_file2):
     # print(f"gene: {test_gene}")
 
     # Select only the desired columns
-    selected_columns = ["Sample_ID", "forward", "reverse", "seed", "gene"]
+    # selected_columns = ["Sample_ID", "forward", "reverse", "seed", "gene"]
+    selected_columns = ["Sample ID", "forward", "reverse", "seed", "gene"]
     merged_df = merged_df[selected_columns]
 
     # Get the directory and filename from input_file1
